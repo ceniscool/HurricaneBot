@@ -13,6 +13,7 @@ OUTLOOK_URL = "https://www.nhc.noaa.gov/text/MIATWOAT.shtml"
 
 STORM_FILE = "storms.json"
 OFFSEASON_FILE = "offseason.json"
+PERCENT_FILE = "percent.json"
 
 
 # ---------------------------
@@ -24,33 +25,87 @@ def in_season():
 
 
 # ---------------------------
-# REAL outlook fetch
+# CLEAN NOAA outlook
 # ---------------------------
 def get_real_outlook():
     try:
         response = requests.get(OUTLOOK_URL, timeout=10)
         text = response.text
 
-        start = text.find("Tropical Weather Outlook")
-        end = text.find("$$")
+        start = text.find("For the North Atlantic")
+        end = text.find("$$", start)
 
-        if start != -1 and end != -1:
-            outlook = text[start:end]
+        if start == -1 or end == -1:
+            return "No clean outlook available.", []
 
-            lines = [line.strip() for line in outlook.splitlines() if line.strip()]
-            cleaned = "\n".join(lines[:12])
+        outlook = text[start:end]
 
-            return cleaned
+        clean = re.sub(r"<.*?>", "", outlook)
 
-        return "No outlook available."
+        lines = []
+        for line in clean.splitlines():
+            line = line.strip()
+
+            if not line:
+                continue
+
+            if any(x in line.lower() for x in [
+                "http", "rss", "map", "product", "format", "gis"
+            ]):
+                continue
+
+            lines.append(line)
+
+        percentages = sorted(
+            set(re.findall(r"\d{1,3}%", clean)),
+            key=lambda x: int(x[:-1])
+        )
+
+        formatted = []
+        for line in lines:
+            line = re.sub(r"(\d{1,3}%)", r"**\1**", line)
+            formatted.append(line)
+
+        return "\n".join(formatted[:10]), percentages
 
     except Exception as e:
-        return f"Failed to fetch outlook: {e}"
+        return f"Failed to fetch outlook: {e}", []
 
 
-def extract_percentages(text):
-    matches = re.findall(r"\d{1,3}%", text)
-    return list(set(matches))
+# ---------------------------
+# Percent tracking
+# ---------------------------
+def load_old_percents():
+    if not os.path.exists(PERCENT_FILE):
+        return []
+    with open(PERCENT_FILE, "r") as f:
+        return json.load(f)
+
+
+def save_percents(p):
+    with open(PERCENT_FILE, "w") as f:
+        json.dump(p, f)
+
+
+def percent_increased(new, old):
+    if not old:
+        return True
+    return max([int(n[:-1]) for n in new], default=0) > max([int(o[:-1]) for o in old], default=0)
+
+
+# ---------------------------
+# Region detection
+# ---------------------------
+def detect_region(text):
+    t = text.lower()
+
+    if "gulf" in t:
+        return "🟠 Gulf of Mexico"
+    elif "caribbean" in t:
+        return "🟡 Caribbean Sea"
+    elif "atlantic" in t:
+        return "🔵 Atlantic Ocean"
+    return "🌍 General Atlantic Basin"
 
 
 # ---------------------------
@@ -77,7 +132,7 @@ def update_offseason_time():
 
 
 # ---------------------------
-# Off-season embed (REAL DATA)
+# Off-season embed
 # ---------------------------
 def send_offseason():
     now = datetime.now(UTC)
@@ -90,20 +145,38 @@ def send_offseason():
 
     days_left = (june_first - now).days
 
-    outlook_text = get_real_outlook()
-    percentages = extract_percentages(outlook_text)
+    outlook_text, percentages = get_real_outlook()
+    old_percent = load_old_percents()
 
+    region = detect_region(outlook_text)
     percent_text = " / ".join(percentages) if percentages else "None"
 
+    highest = max([int(p[:-1]) for p in percentages], default=0)
+
+    if highest >= 70:
+        color = 0xe74c3c
+    elif highest >= 40:
+        color = 0xf39c12
+    elif highest > 0:
+        color = 0xf1c40f
+    else:
+        color = 0x95a5a6
+
+    if percent_increased(percentages, old_percent):
+        title = "🚨 Development Chances Increased!"
+    else:
+        title = "🟡 Atlantic Hurricane Off-Season Update"
+
     embed = {
-        "title": "🟡 Atlantic Hurricane Off-Season Update",
+        "title": title,
         "description": (
             f"📴 **Off-season status**\n\n"
             f"⏳ **{days_left} days until June 1**\n\n"
+            f"📍 **Region:** {region}\n"
             f"📊 **Formation Chances:** {percent_text}\n\n"
-            f"📡 **Latest NHC Outlook:**\n{outlook_text[:1500]}"
+            f"📡 **Latest NHC Outlook:**\n{outlook_text[:1200]}"
         ),
-        "color": 0xf1c40f,
+        "color": color,
         "image": {
             "url": IMAGE_URL
         },
@@ -117,6 +190,8 @@ def send_offseason():
         "username": "Hurricane Tracker",
         "embeds": [embed]
     })
+
+    save_percents(percentages)
 
 
 # ---------------------------
@@ -231,7 +306,7 @@ def check():
         if should_send_offseason():
             send_offseason()
             update_offseason_time()
-            print("📨 Sent weekly off-season update")
+            print("📨 Sent weekly update")
 
         return
     else:
