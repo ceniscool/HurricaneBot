@@ -1,14 +1,15 @@
 import requests
-import hashlib
 import os
 import time
 import json
+import re
 from datetime import datetime, UTC
 
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") or "YOUR_WEBHOOK_URL"
 
 IMAGE_URL = "https://www.nhc.noaa.gov/xgtwo/two_atl_7d0.png"
 STORM_DATA_URL = "https://www.nhc.noaa.gov/CurrentStorms.json"
+OUTLOOK_URL = "https://www.nhc.noaa.gov/text/MIATWOAT.shtml"
 
 STORM_FILE = "storms.json"
 OFFSEASON_FILE = "offseason.json"
@@ -20,6 +21,36 @@ OFFSEASON_FILE = "offseason.json"
 def in_season():
     now = datetime.now(UTC)
     return 6 <= now.month <= 11
+
+
+# ---------------------------
+# REAL outlook fetch
+# ---------------------------
+def get_real_outlook():
+    try:
+        response = requests.get(OUTLOOK_URL, timeout=10)
+        text = response.text
+
+        start = text.find("Tropical Weather Outlook")
+        end = text.find("$$")
+
+        if start != -1 and end != -1:
+            outlook = text[start:end]
+
+            lines = [line.strip() for line in outlook.splitlines() if line.strip()]
+            cleaned = "\n".join(lines[:12])
+
+            return cleaned
+
+        return "No outlook available."
+
+    except Exception as e:
+        return f"Failed to fetch outlook: {e}"
+
+
+def extract_percentages(text):
+    matches = re.findall(r"\d{1,3}%", text)
+    return list(set(matches))
 
 
 # ---------------------------
@@ -35,7 +66,7 @@ def should_send_offseason():
     last_sent = datetime.fromisoformat(data["last_sent"])
     now = datetime.now(UTC)
 
-    return (now - last_sent).total_seconds() >= 604800  # 7 days
+    return (now - last_sent).total_seconds() >= 604800
 
 
 def update_offseason_time():
@@ -46,7 +77,7 @@ def update_offseason_time():
 
 
 # ---------------------------
-# Off-season embed
+# Off-season embed (REAL DATA)
 # ---------------------------
 def send_offseason():
     now = datetime.now(UTC)
@@ -59,52 +90,37 @@ def send_offseason():
 
     days_left = (june_first - now).days
 
-    # Ocean conditions (simple simulation)
-    if days_left > 120:
-        ocean_text = "🌡️ Ocean temperatures are currently stable for this time of year."
-    elif days_left > 60:
-        ocean_text = "🌡️ Ocean temperatures are gradually warming across the Atlantic."
-    else:
-        ocean_text = "🔥 Ocean temperatures are warming — conditions may soon become favorable for development."
+    outlook_text = get_real_outlook()
+    percentages = extract_percentages(outlook_text)
 
-    # Smart outlook
-    if days_left > 150:
-        outlook = "Quiet pattern typical of winter months."
-    elif days_left > 90:
-        outlook = "Gradual transition toward pre-season conditions."
-    elif days_left > 30:
-        outlook = "Pre-season signals increasing. Early development becomes possible."
-    else:
-        outlook = "Hurricane season is approaching rapidly. Monitoring will increase."
+    percent_text = " / ".join(percentages) if percentages else "None"
 
     embed = {
         "title": "🟡 Atlantic Hurricane Off-Season Update",
         "description": (
             f"📴 **Off-season status**\n\n"
             f"⏳ **{days_left} days until June 1**\n\n"
-            f"{ocean_text}\n\n"
-            f"🧠 **Outlook:** {outlook}"
+            f"📊 **Formation Chances:** {percent_text}\n\n"
+            f"📡 **Latest NHC Outlook:**\n{outlook_text[:1500]}"
         ),
         "color": 0xf1c40f,
         "image": {
             "url": IMAGE_URL
         },
         "footer": {
-            "text": "Ryan's Hurricane Tracking Bot"
+            "text": "Live data from NOAA / NHC"
         },
         "timestamp": now.isoformat()
     }
 
-    data = {
+    requests.post(WEBHOOK_URL, json={
         "username": "Hurricane Tracker",
         "embeds": [embed]
-    }
-
-    requests.post(WEBHOOK_URL, json=data)
+    })
 
 
 # ---------------------------
-# Load/save storm memory
+# Storm memory
 # ---------------------------
 def load_old_storms():
     if not os.path.exists(STORM_FILE):
@@ -119,27 +135,32 @@ def save_storms(storms):
 
 
 # ---------------------------
-# Get storm data
+# Get storms
 # ---------------------------
 def get_storms():
-    response = requests.get(STORM_DATA_URL)
-    data = response.json()
+    try:
+        response = requests.get(STORM_DATA_URL, timeout=10)
+        data = response.json()
 
-    storms = []
+        storms = []
 
-    for storm in data.get("activeStorms", []):
-        if storm.get("basin") != "AL":
-            continue
+        for storm in data.get("activeStorms", []):
+            if storm.get("basin") != "AL":
+                continue
 
-        storms.append({
-            "id": storm.get("id"),
-            "name": storm.get("name"),
-            "type": storm.get("type"),
-            "wind": storm.get("windSpeed", "N/A"),
-            "pressure": storm.get("pressure", "N/A")
-        })
+            storms.append({
+                "id": storm.get("id"),
+                "name": storm.get("name"),
+                "type": storm.get("type"),
+                "wind": storm.get("windSpeed", "N/A"),
+                "pressure": storm.get("pressure", "N/A")
+            })
 
-    return storms
+        return storms
+
+    except Exception as e:
+        print("Storm fetch error:", e)
+        return []
 
 
 # ---------------------------
@@ -151,7 +172,7 @@ def detect_new_storms(new, old):
 
 
 # ---------------------------
-# Format storm message
+# Format storm
 # ---------------------------
 def format_storm(storm):
     name = storm["name"]
@@ -176,7 +197,7 @@ def format_storm(storm):
 
 
 # ---------------------------
-# Send storm webhook
+# Send storm alert
 # ---------------------------
 def send_webhook(new_storms):
     description = "\n\n".join(format_storm(s) for s in new_storms)
@@ -194,12 +215,10 @@ def send_webhook(new_storms):
         "timestamp": datetime.now(UTC).isoformat()
     }
 
-    data = {
+    requests.post(WEBHOOK_URL, json={
         "username": "Hurricane Alerts",
         "embeds": [embed]
-    }
-
-    requests.post(WEBHOOK_URL, json=data)
+    })
 
 
 # ---------------------------
@@ -216,7 +235,6 @@ def check():
 
         return
     else:
-        # Reset offseason tracker when season starts
         if os.path.exists(OFFSEASON_FILE):
             os.remove(OFFSEASON_FILE)
 
@@ -234,7 +252,7 @@ def check():
 
 
 # ---------------------------
-# Loop (auto-restart safe)
+# Loop
 # ---------------------------
 if __name__ == "__main__":
     while True:
