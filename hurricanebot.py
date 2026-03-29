@@ -4,7 +4,7 @@ import os
 import time
 from datetime import datetime
 
-WEBHOOK_URL = "https://discordapp.com/api/webhooks/1402124321714868294/vlwCMFTMFQm2acBu5bMB3xkvzKmL5kbs223Sak4IWlQfvqeTrV2EhJG0Q1NrRQjkPr9f"
+WEBHOOK_URL = "YOUR_WEBHOOK_URL"
 
 IMAGE_URL = "https://www.nhc.noaa.gov/xgtwo/two_atl_7d0.png"
 STORM_DATA_URL = "https://www.nhc.noaa.gov/CurrentStorms.json"
