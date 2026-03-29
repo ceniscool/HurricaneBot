@@ -100,7 +100,7 @@ def detect_region(text):
     t = text.lower()
 
     if "gulf" in t:
-        return "🟠 Gulf of Mexico"
+        return "🟠 Gulf of America 🦅🇺🇸"
     elif "caribbean" in t:
         return "🟡 Caribbean Sea"
     elif "atlantic" in t:
