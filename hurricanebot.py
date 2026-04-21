@@ -15,6 +15,7 @@ STORM_FILE = "storms.json"
 OFFSEASON_FILE = "offseason.json"
 PERCENT_FILE = "percent.json"
 
+# deployment checks
 
 # ---------------------------
 # Season check
